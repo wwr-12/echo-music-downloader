@@ -1,6 +1,6 @@
 # EchoMusic 音乐下载器
 
-[![Version](https://img.shields.io/badge/version-2.3.1-1D9E75)](#更新日志)
+[![Version](https://img.shields.io/badge/version-2.4.2-1D9E75)](#更新日志)
 [![EchoMusic](https://img.shields.io/badge/EchoMusic-%3E%3D%202.3.2--beta.10-blue)](https://github.com/hoowhoami/EchoMusic)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#平台兼容性)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green)](#许可证)
@@ -29,7 +29,7 @@
 1. **候选链**：以你选的音质为上限，按宿主同款档位顺序从高到低逐级尝试
    `128 → 320 → 无损 → Hi-Res → 蝰蛇超清 → 蝰蛇母带 → 蝰蛇全景声`
 2. **音源核对**：每档先在歌曲的音质清单（relateGoods）里核对真实音源（支持 `hq`/`sq`/`hires` 别名与 level 位图），清单里没有的档位直接跳过——**绝不拿标准音质的 hash 冒充高音质请求**
-3. **真实性校验**：酷狗接口对无权限的高音质请求有时会**静默降级**（不报错、直接返回一个标准 mp3 直链）。插件对无损档校验文件容器（必须 flac/ape/wav）、对 HQ 校验码率——**降级的假音源会被拦截**，继续沿链下降
+3. **真实性校验**：酷狗接口对无权限的高音质请求有时会**静默降级**（不报错、直接返回一个标准 mp3 直链）。插件对 SQ 无损 / Hi-Res 档校验文件容器（必须 flac/ape/wav）、对蝰蛇三档校验容器（flac/ape/wav/ogg——蝰蛇音源本身就是 OGG 容器）、对 HQ 校验码率——**降级的假音源会被拦截**，继续沿链下降
 4. **如实交付**：toast 与文件名中的音质永远反映真实下载内容，例如：「无法获取 蝰蛇全景声，已回退到 SQ 无损」→ 拿到的就是 18M 的 `.flac`，而不是 3M 的 `.mp3`
 5. **终极兜底**：候选链全部失败（如账号无任何 VIP 权限）时，用默认音源尽量完成下载
 
@@ -47,7 +47,7 @@ https://raw.githubusercontent.com/Apricityx/echo-music-downloader/main/echo-plug
 
 ### 方式二：本地安装
 
-1. 下载最新的 `echo-music-downloader-v2.3.1.zip`
+1. 下载最新的 `echo-music-downloader-v2.4.2.zip`
 2. 打开 EchoMusic →「插件管理」→「本地插件」→ 加载该 zip
 3. 启用插件
 
@@ -80,12 +80,16 @@ https://raw.githubusercontent.com/Apricityx/echo-music-downloader/main/echo-plug
 | 伴生文件 | 生成 `歌曲名.lrc` / `歌曲名.jpg` / `歌曲名.json` |
 | 两者都写 | 嵌入 + 伴生文件 |
 
-嵌入由插件内置本机工具 `native/echotag-x64.exe` 完成（Rust 编写、仅标准库、约 144 KB）：
+嵌入由插件内置本机工具 `native/echotag-x64.exe` 完成（Rust 编写、仅标准库、约 152 KB）：
 
 - **MP3** → ID3v2.3：`TIT2` / `TPE1` / `TALB`（UTF-16 中文）+ `USLT` 歌词 + `APIC` 封面；自动剥离旧 ID3v2.4 / v1 标签
 - **FLAC** → `VORBIS_COMMENT` + `PICTURE` 块；**合并式打标**：
   - 新值只覆盖 TITLE / ARTIST / ALBUM / LYRICS 五个键，其他播放器或第三方工具写入的字段**原样保留**
   - 未提供新封面时**保留原有 PICTURE 封面块**
+- **OGG（Ogg Vorbis）** → 原生 Vorbis Comment 重写 + `METADATA_BLOCK_PICTURE` 封面约定：
+  - 与 FLAC 相同的合并式语义：自定义字段与 vendor 原样保留
+  - **不转码、不重新编码音频数据**——音频包按原始字节保留，其他复用流（如内嵌字幕）也逐字节保留
+  - 页级重写：CRC 校验和重算、页序号连续重排、跨页注释安全拆装
 - 临时文件写入 → 原子替换，8 MB+ 大文件安全；嵌入成功后自动清理全部临时文件与其宿主任务记录
 - 封面在**真正落盘后**才启动嵌入工具；封面下载失败时自动降级为仅嵌歌词
 - 非 Windows 平台、授权被拒绝或嵌入超时，自动回退为伴生文件并明确提示原因
@@ -105,7 +109,7 @@ echotag 工具源码位于 `echotag-src/`（纯 Rust 标准库，无第三方依
 ```bash
 cd echotag-src
 cargo build --release
-python test_echotag.py            # 9 项标签兼容性测试
+python test_echotag.py            # 12 项标签兼容性测试（含 3 项 OGG）
 node test_quality_fallback.mjs    # 13 场景音质决策表自测
 ```
 
@@ -141,7 +145,13 @@ echo-music-downloader/
 保存在你选择的下载目录。「下载管理」页会恢复历史记录，文件被手动删除后重新下载也能自愈，无需手动清理记录。
 
 **Q：哪些格式支持嵌入？**
-MP3（ID3v2.3）与 FLAC（Vorbis Comment + PICTURE），工具按文件魔数识别、不依赖扩展名。其他格式（M4A / OGG 等）自动回退为伴生文件。
+MP3（ID3v2.3）、FLAC 与 OGG（Vorbis Comment，OGG 封面走 `METADATA_BLOCK_PICTURE` 约定），工具按文件魔数识别、不依赖扩展名。其他格式（M4A / WAV 等）自动回退为伴生文件。
+
+**Q：Windows 自带播放器打不开 OGG 文件（0xC00D36C4）？**
+文件没有问题——Windows 10/11 的「媒体播放器」不内置 Vorbis 解码器。两种解决方式：① 安装微软商店官方扩展 **Web Media Extensions**，装完自带播放器即可播放；② 改用 PotPlayer / VLC / foobar2000 等第三方播放器。EchoMusic 内基于 Chromium 的播放不受影响。
+
+**Q：为什么这首歌下载下来是 OGG 而不是 MP3？**
+文件格式由歌曲的真实音源决定：酷狗部分音质档（多为无损/高音质）的源文件就是 Ogg 容器，插件如实下载真实音源，不会偷偷转码（转码必然损失音质）。
 
 **Q：VIP / 无损音质下载失败？**
 付费音质需要账号有对应权限，无权限时按候选链自动降级到真实可用的最高音质。
@@ -157,6 +167,20 @@ MP3（ID3v2.3）与 FLAC（Vorbis Comment + PICTURE），工具按文件魔数�
 嵌入工具目前仅提供 Windows x64 版本（`echotag-x64.exe`）。非 Windows 平台上插件可正常下载与生成伴生文件，嵌入自动跳过。
 
 ## 更新日志
+
+### v2.4.2
+- **蝰蛇音源放行 OGG 容器**：酷狗蝰蛇三档（超清/母带/全景声）的真实音源就是 OGG 容器，防降级校验此前会误拦真实音源白白降级——现按档位分设校验白名单，静默降级的 mp3 依然拦截
+- **OGG 封面双约定写入**：同时写 METADATA_BLOCK_PICTURE（Xiph 官方约定）与 COVERART/COVERARTMIME（旧约定），最大化兼容各类播放器与资源管理器缩略图
+- 嵌入工具代码重构：CRC 查找表进程内单次构建，OGG 处理拆分为布局定位 / 包提取 / 编排重组等单一职责函数，行为不变
+
+### v2.4.1
+- **修复 OGG 嵌入导致的文件损坏**（重要）：酷狗源 OGG 的注释头与设置头同页时，重写后残留多余的注释包并丢失流结束标志（EOS），导致文件无法播放——现正确处理任意头页布局，恢复 13 项自动化测试全过
+- 嵌入工具物理重组逻辑重写为三段式，注释页数变化不再影响音频页完整性
+
+### v2.4.0
+- **OGG 原生嵌入**：Ogg Vorbis 支持原生标签写入（此前只能生成伴生文件）——歌词、封面、歌曲信息直接进音频文件，**不转码不重编码**，音质零损失
+- OGG 实现为页级重写：注释页重建 + CRC 重算 + 页序号重排，音频页与其他复用流逐字节保留
+- 嵌入工具测试扩充至 12 项（新增跨页注释、多流保留、METADATA_BLOCK_PICTURE 三类 OGG 场景）
 
 ### v2.3.1
 - **主题自适应**：修复彩色壁纸主题下白底白字，界面跟随宿主明暗主题

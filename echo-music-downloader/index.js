@@ -30,6 +30,10 @@ const QUALITY_ORDER = ['128', '320', 'flac', 'high', 'viper_clear', 'viper_tape'
 
 /** 无损音源的真实容器扩展名（Hi-Res/蝰蛇/无损档位交付时应属于这些）。 */
 const LOSSLESS_EXTS = new Set(['flac', 'ape', 'wav']);
+// 蝰蛇音源（超清/母带/全景声）实际为 OGG(Vorbis) 容器——防降级校验必须放行 OGG，
+// 否则蝰蛇的真实音源会被误判为假音源白白降级；静默降级的 mp3 仍会被拦截。
+const VIPER_EXTS = new Set(['flac', 'ape', 'wav', 'ogg']);
+const VIPER_QUALITIES = new Set(['viper_tape', 'viper_clear', 'viper_atmos']);
 /** 期望无损音源的档位 —— 拿到有损扩展名即视为接口静默降级（见 resolveSongUrl）。 */
 const LOSSLESS_QUALITIES = new Set(['flac', 'high', 'viper_tape', 'viper_clear', 'viper_atmos']);
 
@@ -423,11 +427,15 @@ export async function activate(ctx) {
     // 直接返回一个标准音质 mp3 直链。若无损档位拿到有损扩展名，说明该档
     // 并没有真实音源，视为失败并继续沿回退链下降，避免冒充高音质交付
     //（否则会出现 toast 说 Hi-Res、文件却是 3M mp3 的假交付）。
-    if (LOSSLESS_QUALITIES.has(quality) && !LOSSLESS_EXTS.has(ext)) {
-      return {
-        ok: false,
-        reason: `未获取到 ${QUALITY_LABELS[quality] || quality} 真实音源（接口返回了 ${ext} 文件）`,
-      };
+    // 注意：蝰蛇三档的真实音源本身就是 OGG 容器，放行 OGG 只拦 mp3 等降级产物。
+    if (LOSSLESS_QUALITIES.has(quality)) {
+      const allowedExts = VIPER_QUALITIES.has(quality) ? VIPER_EXTS : LOSSLESS_EXTS;
+      if (!allowedExts.has(ext)) {
+        return {
+          ok: false,
+          reason: `未获取到 ${QUALITY_LABELS[quality] || quality} 真实音源（接口返回了 ${ext} 文件）`,
+        };
+      }
     }
     // 320 档弱校验：响应里能读到码率且明显低于 HQ（<192kbps）时同样视为降级。
     if (quality === '320') {
@@ -744,10 +752,10 @@ export async function activate(ctx) {
     if (settings.scrapeLyric && !lyricsText.trim()) issues.push('未找到歌词');
     if (settings.scrapeCover && !coverUrl) issues.push('未找到封面来源');
 
-    // 嵌入模式：echotag 仅支持 MP3/FLAC 内容（内部按魔数识别，扩展名不限）；
+    // 嵌入模式：echotag 支持 MP3/FLAC/OGG 内容（内部按魔数识别，扩展名不限）；
     // 其他格式不启动嵌入，直接伴生并明确提示。
     const audioExt = (audioRelativePath.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
-    const embedSupported = audioExt === 'mp3' || audioExt === 'flac';
+    const embedSupported = audioExt === 'mp3' || audioExt === 'flac' || audioExt === 'ogg';
     if (mode === 'embed' || mode === 'both') {
       if (audioExt && !embedSupported) {
         issues.push(`${audioExt.toUpperCase()} 格式暂不支持嵌入，已生成伴生文件`);
@@ -1304,7 +1312,7 @@ export async function activate(ctx) {
             h(
               'div',
               { style: hintStyle },
-              '嵌入：把标题/歌手/专辑/歌词/封面直接写进 MP3（ID3v2.3）或 FLAC（Vorbis 标签）文件本身；由插件内置工具完成，首次使用会弹授权确认。开启刮削且为嵌入/双写模式时，必须授权嵌入工具才能下载（未授权会每次弹窗，拒绝则取消下载）。伴生文件：生成 歌曲名.lrc / .jpg / .json。嵌入失败会自动回退为伴生文件。',
+              '嵌入：把标题/歌手/专辑/歌词/封面直接写进 MP3（ID3v2.3）、FLAC 或 OGG（Vorbis 标签）文件本身；由插件内置工具完成，首次使用会弹授权确认。开启刮削且为嵌入/双写模式时，必须授权嵌入工具才能下载（未授权会每次弹窗，拒绝则取消下载）。伴生文件：生成 歌曲名.lrc / .jpg / .json。嵌入失败会自动回退为伴生文件。',
             ),
             h('label', { style: rowStyle }, [
               h('span', { style: labelStyle }, '写入歌词'),
