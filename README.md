@@ -1,6 +1,6 @@
 # EchoMusic 音乐下载器
 
-[![Version](https://img.shields.io/badge/version-2.4.2-1D9E75)](#更新日志)
+[![Version](https://img.shields.io/badge/version-2.4.3-1D9E75)](#更新日志)
 [![EchoMusic](https://img.shields.io/badge/EchoMusic-%3E%3D%202.3.2--beta.10-blue)](https://github.com/hoowhoami/EchoMusic)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#平台兼容性)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green)](#许可证)
@@ -47,7 +47,7 @@ https://raw.githubusercontent.com/Apricityx/echo-music-downloader/main/echo-plug
 
 ### 方式二：本地安装
 
-1. 下载最新的 `echo-music-downloader-v2.4.2.zip`
+1. 下载最新的 `echo-music-downloader-v2.4.3.zip`
 2. 打开 EchoMusic →「插件管理」→「本地插件」→ 加载该 zip
 3. 启用插件
 
@@ -86,10 +86,11 @@ https://raw.githubusercontent.com/Apricityx/echo-music-downloader/main/echo-plug
 - **FLAC** → `VORBIS_COMMENT` + `PICTURE` 块；**合并式打标**：
   - 新值只覆盖 TITLE / ARTIST / ALBUM / LYRICS 五个键，其他播放器或第三方工具写入的字段**原样保留**
   - 未提供新封面时**保留原有 PICTURE 封面块**
-- **OGG（Ogg Vorbis）** → 原生 Vorbis Comment 重写 + `METADATA_BLOCK_PICTURE` 封面约定：
+- **OGG（Ogg Vorbis）** → 原生 Vorbis Comment 重写 + 封面双约定：
   - 与 FLAC 相同的合并式语义：自定义字段与 vendor 原样保留
   - **不转码、不重新编码音频数据**——音频包按原始字节保留，其他复用流（如内嵌字幕）也逐字节保留
   - 页级重写：CRC 校验和重算、页序号连续重排、跨页注释安全拆装
+  - 封面同时写 `METADATA_BLOCK_PICTURE`（Xiph 官方约定）与 `COVERART`/`COVERARTMIME`（旧约定）
 - 临时文件写入 → 原子替换，8 MB+ 大文件安全；嵌入成功后自动清理全部临时文件与其宿主任务记录
 - 封面在**真正落盘后**才启动嵌入工具；封面下载失败时自动降级为仅嵌歌词
 - 非 Windows 平台、授权被拒绝或嵌入超时，自动回退为伴生文件并明确提示原因
@@ -109,8 +110,8 @@ echotag 工具源码位于 `echotag-src/`（纯 Rust 标准库，无第三方依
 ```bash
 cd echotag-src
 cargo build --release
-python test_echotag.py            # 12 项标签兼容性测试（含 3 项 OGG）
-node test_quality_fallback.mjs    # 13 场景音质决策表自测
+python test_echotag.py            # 13 项标签兼容性测试（含 4 项 OGG）
+node test_quality_fallback.mjs    # 15 场景音质决策表自测
 ```
 
 构建产物 `target/release/echotag.exe` 复制为插件的 `native/echotag-x64.exe` 即可。
@@ -153,6 +154,9 @@ MP3（ID3v2.3）、FLAC 与 OGG（Vorbis Comment，OGG 封面走 `METADATA_BLOCK
 **Q：为什么这首歌下载下来是 OGG 而不是 MP3？**
 文件格式由歌曲的真实音源决定：酷狗部分音质档（多为无损/高音质）的源文件就是 Ogg 容器，插件如实下载真实音源，不会偷偷转码（转码必然损失音质）。
 
+**Q：资源管理器预览能看到封面，媒体播放器播放时却没有？**
+两套不同的读取机制：资源管理器缩略图认 OGG 的标准封面约定（能显示 = 文件封面数据完好）；而 Windows 自带的媒体播放器只给 MP3/M4A 内置了封面映射，Ogg 格式没有——微软的已知短板，任何工具都无法从文件侧绕过。想看封面请用 foobar2000 / MusicBee / AIMP / VLC 等播放器。
+
 **Q：VIP / 无损音质下载失败？**
 付费音质需要账号有对应权限，无权限时按候选链自动降级到真实可用的最高音质。
 
@@ -167,6 +171,10 @@ MP3（ID3v2.3）、FLAC 与 OGG（Vorbis Comment，OGG 封面走 `METADATA_BLOCK
 嵌入工具目前仅提供 Windows x64 版本（`echotag-x64.exe`）。非 Windows 平台上插件可正常下载与生成伴生文件，嵌入自动跳过。
 
 ## 更新日志
+
+### v2.4.3
+- 刮削自检页显示嵌入支持格式（MP3 / FLAC / OGG 原生嵌入；WAV / M4A 等走伴生文件），下载前即知预期
+- 文档纠偏与 FAQ 补充（OGG 封面在各播放器的显示差异说明）
 
 ### v2.4.2
 - **蝰蛇音源放行 OGG 容器**：酷狗蝰蛇三档（超清/母带/全景声）的真实音源就是 OGG 容器，防降级校验此前会误拦真实音源白白降级——现按档位分设校验白名单，静默降级的 mp3 依然拦截
