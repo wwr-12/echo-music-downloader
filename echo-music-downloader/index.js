@@ -25,8 +25,20 @@ const QUALITY_LABELS = {
   viper_atmos: '蝰蛇全景声',
 };
 
-/** 音质自动回退顺序（从高到低），不含蝰蛇系列（特殊音效流，回退意义不大）。 */
-const FALLBACK_CHAIN = ['high', 'flac', '320', '128'];
+/** 音质档位（从低到高，与宿主 AUDIO_QUALITY_ORDER 完全一致）。 */
+const QUALITY_ORDER = ['128', '320', 'flac', 'high', 'viper_clear', 'viper_tape', 'viper_atmos'];
+
+/** 无损音源的真实容器扩展名（Hi-Res/蝰蛇/无损档位交付时应属于这些）。 */
+const LOSSLESS_EXTS = new Set(['flac', 'ape', 'wav']);
+/** 期望无损音源的档位 —— 拿到有损扩展名即视为接口静默降级（见 resolveSongUrl）。 */
+const LOSSLESS_QUALITIES = new Set(['flac', 'high', 'viper_tape', 'viper_clear', 'viper_atmos']);
+
+/** 音质候选链：wanted（含）以下从高到低逐级尝试 —— 与宿主 getSongQualityCandidates 一致。 */
+function getQualityCandidates(wanted) {
+  const index = QUALITY_ORDER.indexOf(wanted);
+  if (index < 0) return ['128'];
+  return QUALITY_ORDER.slice(0, index + 1).reverse();
+}
 
 /** 允许使用的扩展名白名单，防止响应里的异常 extName 拼进文件名。 */
 const SAFE_EXTS = new Set(['mp3', 'flac', 'm4a', 'aac', 'ogg', 'wav', 'ape', 'wma']);
@@ -149,6 +161,28 @@ function extractExt(payload, depth = 0) {
   return '';
 }
 
+/** 递归从响应里找指定数字字段（如 bitrate）。 */
+function findDeepNumber(payload, fieldName, depth = 0) {
+  if (!payload || typeof payload !== 'object' || depth > 3) return 0;
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      const found = findDeepNumber(item, fieldName, depth + 1);
+      if (found) return found;
+    }
+    return 0;
+  }
+  const value = payload[fieldName];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value && Number.isFinite(Number(value))) return Number(value);
+  for (const key of ['data', 'info']) {
+    if (key in payload) {
+      const found = findDeepNumber(payload[key], fieldName, depth + 1);
+      if (found) return found;
+    }
+  }
+  return 0;
+}
+
 /** 找到音乐 URL 对应的 data 记录（供扩展名判断）。 */
 function findDataRecord(payload, depth = 0) {
   if (!payload || typeof payload !== 'object' || depth > 3) return null;
@@ -169,11 +203,37 @@ function findDataRecord(payload, depth = 0) {
   return null;
 }
 
-/** 按音质挑选 hash：优先用 relateGoods 里对应音质的 hash，否则退回歌曲默认 hash。 */
+/**
+ * relateGoods 条目与目标音质是否匹配（对齐宿主 doesRelateGoodMatchQuality：
+ * quality 别名 hq/sq/hires… + level 位图 4=HQ 5=SQ 6=Hi-Res 101=母带）。
+ */
+function relateGoodMatchesQuality(item, quality) {
+  const q = String(item?.quality ?? '').trim().toLowerCase();
+  const level = item?.level;
+  if (quality === '128') return q === '128' || level === 1 || level === 2;
+  if (quality === 'viper_clear' || quality === 'viper_atmos') return q === quality;
+  if (quality === 'viper_tape') return q === 'viper_tape' || level === 101;
+  if (quality === '320') return q === '320' || q === 'hq' || level === 4;
+  if (quality === 'flac') return q === 'flac' || q === 'sq' || level === 5;
+  if (quality === 'high')
+    return q === 'high' || q === 'hires' || q === 'hi-res' || q === 'res' || level === 6;
+  return false;
+}
+
+/**
+ * 按音质挑选 hash（对齐宿主播放解析器 resolver 的决策语义）：
+ *  - relateGoods 命中该音质 → 用对应 hash；
+ *  - relateGoods 有数据但没有该音质 → 返回空串：该音质对这首歌确实不存在，
+ *    让回退链自动降到下一档（绝不拿默认 hash 顶替 —— 顶替会把高音质请求
+ *    变成"成功"，实际下载到的是标准音质文件）；
+ *  - relateGoods 完全缺失（来源只带主 hash，无先验信息）→ 用主 hash 尝试。
+ */
 function pickQualityHash(song, quality) {
+  if (quality === '128') return song?.hash || ''; // 标准音质恒视为存在（对齐宿主 hasSongQuality）
   const goods = Array.isArray(song?.relateGoods) ? song.relateGoods : [];
-  const matched = goods.find((item) => item && item.quality === quality && item.hash);
-  return matched?.hash || song?.hash || '';
+  const matched = goods.find((item) => relateGoodMatchesQuality(item, quality) && item.hash);
+  if (matched) return matched.hash;
+  return goods.length ? '' : song?.hash || '';
 }
 
 /** 根据模板生成文件名（不含扩展名）。 */
@@ -347,7 +407,7 @@ export async function activate(ctx) {
    */
   const resolveSongUrl = async (song, quality) => {
     const hash = pickQualityHash(song, quality);
-    if (!hash) return { ok: false, reason: '歌曲缺少 hash，无法解析地址' };
+    if (!hash) return { ok: false, reason: `该歌曲没有 ${QUALITY_LABELS[quality] || quality} 音源` };
     const response = await ctx.kugou.music.getSongUrl(
       hash,
       quality,
@@ -359,17 +419,33 @@ export async function activate(ctx) {
     const record = findDataRecord(response);
     const ext =
       extractExt(response) || extFromUrl(urls[0]) || DEFAULT_EXT_BY_QUALITY[quality] || 'mp3';
+    // 真实性校验：酷狗对无权限/无音源的高音质请求常常"静默降级"——不报错，
+    // 直接返回一个标准音质 mp3 直链。若无损档位拿到有损扩展名，说明该档
+    // 并没有真实音源，视为失败并继续沿回退链下降，避免冒充高音质交付
+    //（否则会出现 toast 说 Hi-Res、文件却是 3M mp3 的假交付）。
+    if (LOSSLESS_QUALITIES.has(quality) && !LOSSLESS_EXTS.has(ext)) {
+      return {
+        ok: false,
+        reason: `未获取到 ${QUALITY_LABELS[quality] || quality} 真实音源（接口返回了 ${ext} 文件）`,
+      };
+    }
+    // 320 档弱校验：响应里能读到码率且明显低于 HQ（<192kbps）时同样视为降级。
+    if (quality === '320') {
+      const bitrate = findDeepNumber(response, 'bitrate');
+      if (bitrate && bitrate < 192000) {
+        return { ok: false, reason: '未获取到 HQ 真实音源（接口返回了更低码率）' };
+      }
+    }
     return { ok: true, url: urls[0], urls, quality, ext };
   };
 
   /**
-   * 带自动回退的地址解析：目标音质失败时按 FALLBACK_CHAIN 逐级尝试更低音质。
+   * 带自动回退的地址解析：目标音质失败/不存在时按候选链逐级尝试更低音质，
+   * 最终落在"这首歌支持的最高可用音质"上（链本身从高到低，第一成功即最高）。
    */
   const resolveWithFallback = async (song, wanted) => {
     const tried = [];
-    const chain = [wanted, ...(settings.autoFallback ? FALLBACK_CHAIN : [])].filter(
-      (q, i, list) => QUALITY_LABELS[q] && list.indexOf(q) === i,
-    );
+    const chain = settings.autoFallback ? getQualityCandidates(wanted) : [wanted];
     let lastReason = '';
     for (const quality of chain) {
       try {
@@ -381,6 +457,34 @@ export async function activate(ctx) {
       }
       tried.push(quality);
       if (!settings.autoFallback) break;
+    }
+    // 终极兜底（对齐宿主 compatibilityMode）：候选链全部失败时，
+    // 用歌曲主 hash + 空音质参数请求默认音源（通常是标准音质），尽量不空手而归。
+    if (settings.autoFallback && song?.hash) {
+      try {
+        const response = await ctx.kugou.music.getSongUrl(
+          song.hash,
+          '',
+          undefined,
+          song.albumAudioId ? { albumAudioId: song.albumAudioId } : undefined,
+        );
+        const urls = extractUrls(response);
+        if (urls.length) {
+          const record = findDataRecord(response);
+          const ext = extractExt(response) || extFromUrl(urls[0]) || 'mp3';
+          return {
+            ok: true,
+            url: urls[0],
+            urls,
+            quality: '128',
+            ext,
+            fallbackFrom: tried,
+            defaultFallback: true,
+          };
+        }
+      } catch (error) {
+        lastReason = error?.message || String(error);
+      }
     }
     return { ok: false, reason: lastReason || '解析播放地址失败', tried };
   };
@@ -883,7 +987,8 @@ export async function activate(ctx) {
     }
 
     const wanted = qualityOverride || settings.quality;
-    const key = `${song.hash}:${wanted}`;
+    // 任务卡唯一键：每次下载都是独立任务（含重下同名歌），加时间戳避免新旧卡片互相覆盖
+    const key = `${song.hash}:${wanted}:${Date.now()}`;
     if (!quiet) ctx.toast.info(`开始下载「${title}」（${QUALITY_LABELS[wanted] || wanted}）`);
 
     const resolved = await resolveWithFallback(song, wanted);
@@ -930,12 +1035,16 @@ export async function activate(ctx) {
         conflict,
         resume: true,
         sourceKey,
-        idempotencyKey: key,
+        // 不传 idempotencyKey：引擎对同 key 重复任务要求全部参数 JSON 级一致，
+        // 而重下同一首时音质回退结果/文件名可能合法地变化（如升级修复后假 Hi-Res
+        // 变成真无损），会触发"重复任务参数不一致"。插件的语义是"清理旧记录、
+        // 建新任务"，幂等复用交给 handle.retry()，这里每次都应该是全新任务。
       });
 
     let handle;
     try {
-      // 预清理：用户手动删除已下载文件后，旧终态记录会让引擎拒绝重建任务
+      // 预清理：同音质的历史记录若目标文件已缺失（被用户手动删除），
+      // 清掉让下载列表不残留僵尸条目；文件仍在的记录保留（历史展示用）
       await purgeStaleDownloadRecords(sourceKey).catch(() => {});
       handle = await createTask();
     } catch (error) {
@@ -1044,11 +1153,14 @@ export async function activate(ctx) {
 
   // --- 设置面板 ---------------------------------------------------------------
 
+  // 主题适配：文字一律用宿主真实变量（--color-text-main/secondary，随明暗主题切换）；
+  // 面板/输入框背景用中性半透明色 —— 浅色主题呈浅灰、深色/彩色壁纸主题呈微亮玻璃层，
+  // 与主题文字色永远保持对比，不再依赖宿主不存在的 --color-background-* 变量。
   const rowStyle = 'display:flex;justify-content:space-between;align-items:center;gap:12px;';
-  const labelStyle = 'font-size:13px;color:var(--color-text-primary,#333);flex-shrink:0;';
-  const hintStyle = 'font-size:12px;color:var(--color-text-tertiary,#999);line-height:1.5;';
+  const labelStyle = 'font-size:13px;color:var(--color-text-main,#333);flex-shrink:0;';
+  const hintStyle = 'font-size:12px;color:var(--color-text-secondary,#888);line-height:1.5;';
   const selectStyle =
-    'font-size:13px;padding:4px 8px;border-radius:8px;border:1px solid var(--color-border-tertiary,rgba(0,0,0,.15));background:var(--color-background-primary,#fff);color:var(--color-text-primary,#333);max-width:220px;';
+    'font-size:13px;padding:4px 8px;border-radius:8px;border:1px solid var(--color-border-light,rgba(127,127,127,.3));background:rgba(127,127,127,.08);color:var(--color-text-main,#333);max-width:220px;';
   const inputStyle = `${selectStyle};width:220px;`;
   const buttonStyle =
     'font-size:13px;padding:5px 12px;border-radius:8px;border:none;cursor:pointer;background:#0F6E56;color:#fff;';
@@ -1157,7 +1269,7 @@ export async function activate(ctx) {
             }),
           ]),
           // 音乐刮削
-          h('div', { style: 'display:grid;gap:8px;padding:10px 12px;border-radius:10px;background:var(--color-background-tertiary,rgba(0,0,0,.04));' }, [
+          h('div', { style: 'display:grid;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(127,127,127,.1);' }, [
             h('label', { style: rowStyle }, [
               h('span', { style: `${labelStyle};font-weight:500;` }, '音乐刮削'),
               h('input', {
@@ -1430,18 +1542,24 @@ export async function activate(ctx) {
                 { style: hintStyle },
                 `保存目录：${grantAvailable === false ? '（授权已失效，请在插件设置中重新授权）' : settings.displayPath || settings.directoryId}`,
               )
-            : h('div', { style: `${hintStyle};color:#c2620a;` }, '尚未设置下载目录：请到「插件管理 → 音乐下载器 → 设置」中选择目录，或右键任意歌曲触发目录选择。'),
+            : h('div', { style: `${hintStyle};color:var(--state-warning,#c2620a);` }, '尚未设置下载目录：请到「插件管理 → 音乐下载器 → 设置」中选择目录，或右键任意歌曲触发目录选择。'),
           selfCheckLines.value.length > 0
             ? h(
                 'div',
                 {
                   style:
-                    'margin-top:12px;padding:10px 14px;border-radius:10px;border:1px solid var(--color-border-tertiary,rgba(0,0,0,.1));background:var(--color-background-secondary,#fafafa);display:grid;gap:4px;',
+                    'margin-top:12px;padding:10px 14px;border-radius:10px;border:1px solid var(--color-border-light,rgba(127,127,127,.22));background:rgba(127,127,127,.1);display:grid;gap:4px;',
                 },
                 selfCheckLines.value.map((line, index) =>
                   h(
                     'div',
-                    { key: index, style: 'font-size:12px;line-height:1.6;font-family:monospace;' },
+                    {
+                      key: index,
+                      // 显式文字色：不能裸继承 —— 彩色壁纸主题会把全局文字改成浅色，
+                      // 配上半透明浅面板会变成"白底白字"（v2.3.1 修复的可见性问题）
+                      style:
+                        'font-size:12px;line-height:1.6;font-family:monospace;color:var(--color-text-main,#333);',
+                    },
                     line,
                   ),
                 ),
@@ -1452,7 +1570,7 @@ export async function activate(ctx) {
                 'div',
                 {
                   style:
-                    'margin-top:32px;text-align:center;font-size:13px;color:var(--color-text-tertiary,#999);',
+                    'margin-top:32px;text-align:center;font-size:13px;color:var(--color-text-secondary,#888);',
                 },
                 '暂无下载任务。在歌曲列表右键选择「下载歌曲」，或点击右上角「下载当前歌曲」。',
               )
@@ -1470,7 +1588,7 @@ export async function activate(ctx) {
                       h(
                         'span',
                         {
-                          style: 'font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
+                          style: 'font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-text-main,#333);',
                           title: task.filename,
                         },
                         `${task.title}${task.artist ? ` - ${task.artist}` : ''}`,
@@ -1492,7 +1610,7 @@ export async function activate(ctx) {
                           'div',
                           {
                             style:
-                              'height:6px;border-radius:3px;background:var(--color-background-tertiary,#eee);overflow:hidden;',
+                              'height:6px;border-radius:3px;background:rgba(127,127,127,.25);overflow:hidden;',
                           },
                           h('div', {
                             style: `height:100%;width:${percent}%;border-radius:3px;background:${task.state === 'completed' ? '#0F6E56' : '#1D9E75'};transition:width .3s;`,
@@ -1500,10 +1618,10 @@ export async function activate(ctx) {
                         )
                       : null,
                     task.error
-                      ? h('div', { style: `${hintStyle};color:#a32d2d;` }, task.error)
+                      ? h('div', { style: `${hintStyle};color:var(--state-danger,#e0564f);` }, task.error)
                       : null,
                     task.scrapeNote
-                      ? h('div', { style: `${hintStyle};color:#854f0b;` }, `刮削：${task.scrapeNote}`)
+                      ? h('div', { style: `${hintStyle};color:var(--state-warning,#d99a06);` }, `刮削：${task.scrapeNote}`)
                       : null,
                     h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;' }, [
                       task.canPause ? buttonSmall('暂停', () => control(task, 'pause')) : null,
@@ -1513,7 +1631,7 @@ export async function activate(ctx) {
                       task.state === 'completed'
                         ? h(
                             'span',
-                            { style: 'font-size:12px;color:var(--color-text-tertiary,#999);' },
+                            { style: 'font-size:12px;color:var(--color-text-secondary,#888);' },
                             task.filename,
                           )
                         : null,
@@ -1524,7 +1642,7 @@ export async function activate(ctx) {
                     {
                       key: task.key,
                       style:
-                        'display:grid;gap:6px;padding:12px 14px;border-radius:12px;border:1px solid var(--color-border-tertiary,rgba(0,0,0,.1));background:var(--color-background-secondary,#fafafa);',
+                        'display:grid;gap:6px;padding:12px 14px;border-radius:12px;border:1px solid var(--color-border-light,rgba(127,127,127,.22));background:rgba(127,127,127,.1);',
                     },
                     rowChildren.filter(Boolean),
                   );
