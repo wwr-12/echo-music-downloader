@@ -1,7 +1,7 @@
 {
   "id": "echo-music-downloader",
   "name": "音乐下载器",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "为 EchoMusic 增加本地音乐下载能力：右键任意歌曲即可下载，可将歌词、封面与歌曲信息直接嵌入音频文件（ID3/FLAC/OGG 标签），支持刮削自检与下载历史恢复。",
   "author": "Kou",
   "icon": "icon.svg",

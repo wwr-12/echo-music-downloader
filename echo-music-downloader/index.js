@@ -1492,7 +1492,7 @@ export async function activate(ctx) {
             const authorized = await ensureEmbedAuthorized();
             lines.push(
               authorized
-                ? '✓ 嵌入工具可运行（echotag-x64.exe 授权有效）'
+                ? '✓ 嵌入工具可运行（MP3 / FLAC / OGG 原生嵌入；WAV / M4A 等自动走伴生文件）'
                 : '✗ 嵌入工具未授权：请在弹出的确认框中点「允许」；当前设置下未授权将无法下载',
             );
             const track = ctx.player.currentTrack;
