@@ -1,6 +1,6 @@
 # EchoMusic 音乐下载器
 
-[![Version](https://img.shields.io/badge/version-2.4.3-1D9E75)](#更新日志)
+[![Version](https://img.shields.io/badge/version-2.4.4-1D9E75)](#更新日志)
 [![EchoMusic](https://img.shields.io/badge/EchoMusic-%3E%3D%202.3.2--beta.10-blue)](https://github.com/hoowhoami/EchoMusic)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#平台兼容性)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green)](#许可证)
@@ -47,7 +47,7 @@ https://raw.githubusercontent.com/Apricityx/echo-music-downloader/main/echo-plug
 
 ### 方式二：本地安装
 
-1. 下载最新的 `echo-music-downloader-v2.4.3.zip`
+1. 下载最新的 `echo-music-downloader-v2.4.4.zip`
 2. 打开 EchoMusic →「插件管理」→「本地插件」→ 加载该 zip
 3. 启用插件
 
@@ -171,6 +171,10 @@ MP3（ID3v2.3）、FLAC 与 OGG（Vorbis Comment，OGG 封面走 `METADATA_BLOCK
 嵌入工具目前仅提供 Windows x64 版本（`echotag-x64.exe`）。非 Windows 平台上插件可正常下载与生成伴生文件，嵌入自动跳过。
 
 ## 更新日志
+
+### v2.4.4
+- **修复下载管理页无法下滑**：宿主插件页容器不提供滚动，页面现在自带滚动容器
+- **修复「清空已完成」失效**：此前只清了页面列表，未删除宿主下载记录——页面重开时记录又被恢复回来；现在同步清理宿主记录（磁盘文件不受影响）
 
 ### v2.4.3
 - 刮削自检页显示嵌入支持格式（MP3 / FLAC / OGG 原生嵌入；WAV / M4A 等走伴生文件），下载前即知预期

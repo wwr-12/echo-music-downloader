@@ -1461,14 +1461,31 @@ export async function activate(ctx) {
         }
       };
 
-      // 清空已结束的任务（保留进行中的），不删除磁盘上的任何文件
-      const clearFinished = () => {
+      // 清空已结束的任务（保留进行中的），不删除磁盘上的任何文件。
+      // 必须同时删除宿主下载记录：否则页面重新挂载时 loadHistory 会把
+      // 已完成条目原样恢复，表现为"清空按钮无效"。
+      const clearFinished = async () => {
         const isTerminal = (t) => ['completed', 'failed', 'canceled'].includes(t.state);
+        const finished = tasksRef.value.filter(isTerminal);
         const before = tasksRef.value.length;
         tasksRef.value = tasksRef.value.filter((t) => !isTerminal(t));
         const removed = before - tasksRef.value.length;
-        if (removed) ctx.toast.info(`已清理 ${removed} 个已结束的任务`);
-        else ctx.toast.info('没有可清理的任务');
+        let hostRemoved = 0;
+        for (const task of finished) {
+          if (task.taskId) {
+            await removeDownloadRecord(task.taskId);
+            hostRemoved += 1;
+          }
+        }
+        if (removed) {
+          ctx.toast.info(
+            hostRemoved
+              ? `已清理 ${removed} 个已结束任务（含 ${hostRemoved} 条历史记录）`
+              : `已清理 ${removed} 个已结束任务`,
+          );
+        } else {
+          ctx.toast.info('没有可清理的任务');
+        }
       };
 
       // 刮削自检：逐步验证目录/嵌入工具授权/歌词/封面，把"刮不了"的原因直接显示出来
@@ -1535,7 +1552,15 @@ export async function activate(ctx) {
       };
 
       return () =>
-        h('div', { style: 'padding:20px 24px;max-width:860px;' }, [
+        h(
+          'div',
+          {
+            // 宿主页面容器为 overflow-hidden（PluginPageHost），插件页面必须
+            // 自带滚动容器，否则内容超出视口的部分被裁掉、无法下滑。
+            style:
+              'height:100%;overflow-y:auto;box-sizing:border-box;padding:20px 24px;max-width:860px;',
+          },
+          [
           h('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;' }, [
             h('h2', { style: 'font-size:18px;margin:0;' }, '下载管理'),
             h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;' }, [
